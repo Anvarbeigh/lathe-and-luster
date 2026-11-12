@@ -18,7 +18,7 @@ function makeCtx() {
   ceil.connect(ctx.destination);
   const brick = ctx.createDynamicsCompressor(); brick.threshold.value = -6; brick.knee.value = 0; brick.ratio.value = 20; brick.attack.value = 0.001; brick.release.value = 0.08; brick.connect(ceil);
   const lim = ctx.createDynamicsCompressor(); lim.threshold.value = -14; lim.knee.value = 8; lim.ratio.value = 3; lim.attack.value = 0.005; lim.release.value = 0.2; lim.connect(brick);
-  master = ctx.createGain(); master.gain.value = 1.0; master.connect(lim);
+  master = ctx.createGain(); master.gain.value = 0.6; master.connect(lim);   // ≈ −16 LUFS in play (gate audio capture)
   sfxGain = ctx.createGain(); sfxGain.connect(master);
   musicGain = ctx.createGain(); musicGain.gain.value = 0.0; musicGain.connect(master);
   for (const name of SFX) {

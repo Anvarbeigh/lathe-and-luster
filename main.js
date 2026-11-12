@@ -138,16 +138,16 @@ function fbm(size, seed, oct = [4, 8, 16, 32]) {
   oct.forEach((p, i) => { const n = tileNoise(size, p, seed + i * 17), a = 1 / (i + 1); tot += a; for (let k = 0; k < out.length; k++) out[k] += n[k] * a; });
   for (let k = 0; k < out.length; k++) out[k] /= tot; return out;
 }
-const NZ = 256;
+const NZ = 128;
 const noiseTex = (() => {
-  const a = fbm(NZ, 11), b = fbm(NZ, 29, [8, 16, 32, 64]), c = fbm(NZ, 47, [16, 32, 64]);
+  const a = fbm(NZ, 11, [4, 8, 16]), b = fbm(NZ, 29, [8, 16, 32]), c = fbm(NZ, 47, [16, 32]);
   const d = new Uint8Array(NZ * NZ * 4);
   const st = (x) => clamp((x - 0.5) * 2.2 + 0.5, 0, 1);
   for (let i = 0; i < NZ * NZ; i++) { d[i * 4] = st(a[i]) * 255; d[i * 4 + 1] = st(b[i]) * 255; d[i * 4 + 2] = st(c[i]) * 255; d[i * 4 + 3] = 255; }
   const t = new THREE.DataTexture(d, NZ, NZ, THREE.RGBAFormat); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.needsUpdate = true;
   return t;
 })();
-const crustNoise = fbm(MW, 5, [4, 8, 16, 32]);   // MW x MW, sampled with v scaled
+const CN = 128, crustNoise = fbm(CN, 5, [4, 8, 16]);
 
 // ---------- dirt mask ----------
 const dirt = new Float32Array(MW * MH);        // 1 = thick crust, 0.5 = bare dull metal, 0 = mirror polish
@@ -257,32 +257,31 @@ function setupPiece() {
   u.uMetal.value.set(mt.metal); u.uDull.value.set(mt.dull); u.uC0.value.set(mt.crust[0]); u.uC1.value.set(mt.crust[1]); u.uC2.value.set(mt.crust[2]);
   u.uSweep.value = -1; u.uGlow.value = 0;
   const value = Math.round(SHAPES[si].base * mt.mult * (1 + Math.min(1, S.restored / 40) * 0.5));
-  cur = { si, mi, geo, value, tough: mt.tough * (S.restored === 0 ? 0.42 : S.restored === 1 ? 0.75 : 1) * (1 + si * 0.04) };
-  // visibility per row: rays through the screen at the piece; rows never hit are not counted
+  cur = { si, mi, geo, value, doneAt: S.restored === 0 ? 0.82 : S.restored === 1 ? 0.88 : DONE_AT, tough: mt.tough * (S.restored === 0 ? 0.42 : S.restored === 1 ? 0.75 : 1) * (1 + si * 0.04) };
+  // visibility per row (cached per shape): for every other row, a ray from the camera to the front and back point of
+  // that ring; the row counts if that ray really lands on it (inside walls are seen through the opening)
   holder.updateMatrixWorld(true);
-  rowW.fill(0);
-  const rc = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  const topW = new THREE.Vector3(0, TABLE_TOP + geo.h, 0).project(camera), botW = new THREE.Vector3(0, TABLE_TOP, 0).project(camera);
-  let maxR = 0; for (const r of geo.prof) maxR = Math.max(maxR, r);
-  for (const ang of [0, 1.3, 2.6, 3.9, 5.2]) {
-    piece.rotation.y = ang; piece.updateMatrixWorld(true);
-    for (const xo of [-0.55, -0.25, 0, 0.25, 0.55]) {
-      const sx = new THREE.Vector3(xo * maxR, 0, 0).project(camera).x;
-      for (let k = 0; k <= 90; k++) {
-        ndc.set(sx, lerp(botW.y - 0.02, topW.y + 0.05, k / 90)); rc.setFromCamera(ndc, camera);
-        const hit = rc.intersectObject(proxy, false)[0]; if (!hit || !hit.uv) continue;
-        const ry = Math.round(hit.uv.y * (MH - 1)); for (let d = -2; d <= 2; d++) if (ry + d >= 0 && ry + d < MH) rowW[ry + d] = 1;
-      }
+  piece.rotation.y = 0; piece.updateMatrixWorld(true);
+  if (!geo.rowW) {
+    geo.rowW = new Float32Array(MH);
+    const rc = new THREE.Raycaster(), P = new THREE.Vector3(), dir = new THREE.Vector3();
+    for (let y = 0; y < MH; y += 2) for (const zs of [0.97, -0.97]) {
+      P.set(0, TABLE_TOP + geo.profY[y], geo.prof[y] * zs); dir.copy(P).sub(camera.position).normalize();
+      rc.set(camera.position, dir);
+      const hit = rc.intersectObject(proxy, false)[0]; if (!hit || !hit.uv) continue;
+      const ry = Math.round(hit.uv.y * (MH - 1)); if (Math.abs(ry - y) > 3) continue;
+      for (let d = -3; d <= 3; d++) if (y + d >= 0 && y + d < MH) geo.rowW[y + d] = 1;
     }
   }
+  rowW.set(geo.rowW);
   piece.rotation.y = 0;
   // fresh crust
-  const seed = (S.restored * 131) % MW;
+  const seed = (S.restored * 37) % CN;
   wSum = 0; d0Sum = 0;
   for (let y = 0; y < MH; y++) {
     const o = y * MW;
     for (let x = 0; x < MW; x++) {
-      const n = crustNoise[((y * 2 + seed) % MW) * MW + x];
+      const n = crustNoise[((y + seed) % CN) * CN + (x >> 1)];
       let d = rowW[y] ? clamp(0.6 + 0.45 * (n - 0.35) * 1.6, 0.56, 1) : 0.3;
       dirt[o + x] = d; dirt0[o + x] = d;
       if (rowW[y]) { wSum += MW; d0Sum += d; }
@@ -292,6 +291,7 @@ function setupPiece() {
   progress = 0; stage = 'crust'; revealT = -1; helperV = 0.3;
   piece.position.set(-2.4, 0, 0); slideIn = 1;
   $('pieceName').textContent = `${mt.name} ${SHAPES[si].name}`;
+  updateGoalNext();
   setStageUI();
 }
 
@@ -371,7 +371,7 @@ function updatePoints(sys, dt, grav, floorY) {
       if (!p.rest) {
         p.vy -= grav * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
         const fl = Math.hypot(p.x, p.z) < 0.6 ? TABLE_TOP : floorY;
-        if (grav > 0 && p.y < fl) { p.y = fl; if (Math.abs(p.vy) > 0.6) { p.vy *= -0.25; p.vx *= 0.5; p.vz *= 0.5; } else p.rest = true; }
+        if (grav > 0 && p.y < fl) { p.y = fl; if (Math.abs(p.vy) > 0.6) { p.vy *= -0.25; p.vx *= 0.5; p.vz *= 0.5; } else { p.rest = true; p.life = Math.min(p.life, 0.2); p.max = Math.max(p.max, 0.6); } }
         if (grav === 0) { p.vx *= 0.92; p.vy *= 0.92; p.vz *= 0.92; }
       }
     }
@@ -390,7 +390,7 @@ function emitAt(worldP, normalW, crustAmt, polishAmt) {
   if (crustAmt > 0) {
     const n = Math.min(10, Math.ceil(crustAmt * 0.06));
     const w = spin();
-    emit(flakes, n, worldP, { life: 1.6, spread: 0.03, size: 0.028, color: crustColor,
+    emit(flakes, n, worldP, { life: 0.9, spread: 0.03, size: 0.028, color: crustColor,
       vel: () => ({ x: -worldP.z * w * 0.45 + normalW.x * 0.8 + (Math.random() - 0.5) * 0.7, y: 0.4 + Math.random() * 0.9, z: worldP.x * w * 0.45 + normalW.z * 0.8 + (Math.random() - 0.5) * 0.7 }) });
   }
   if (polishAmt > 0) {
@@ -403,6 +403,11 @@ function emitAt(worldP, normalW, crustAmt, polishAmt) {
 const pointer = { x: 0, y: 0, down: false, over: false, id: null, heldT: 0 };
 let idleT = 0, everHeld = 0;
 const toolEl = $('tool');
+function sizeTool() {
+  const d = camera.position.distanceTo(LOOK), px = brushR() * innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * d);
+  const w = Math.round(px * 2), h = Math.round(px * 2 * 1.5);
+  toolEl.style.width = `${w}px`; toolEl.style.height = `${h}px`; toolEl.style.margin = `${-h / 2}px 0 0 ${-w / 2}px`;
+}
 function placeTool() { toolEl.style.transform = `translate(${pointer.x}px, ${pointer.y}px)`; }
 canvas.addEventListener('pointerdown', (e) => {
   audio.unlock();
@@ -411,7 +416,7 @@ canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture?.(e.pointerId);
   toolEl.classList.add('on', 'down'); placeTool();
   lastHit = null;
-  if (!away && state === 'play') brushTick(1 / 60, true);   // respond on this very event
+  if (!away) { if (state === 'play') brushTick(1 / 60, true); pressPuff(); }   // respond on this very event, in every state
 });
 canvas.addEventListener('pointermove', (e) => {
   if (pointer.down && e.pointerId !== pointer.id) return;
@@ -425,7 +430,7 @@ canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' &
 addEventListener('keydown', (e) => { if (e.code === 'Escape') closePanels(); });
 addEventListener('contextmenu', (e) => e.preventDefault());
 
-const pieceInv = new THREE.Matrix4();
+const lastPoint = new THREE.Vector3();
 function brushTick(dt, instant = false) {
   if (!pointer.down || !piece || slideIn > 0) return;
   const hit = hitAt(pointer.x, pointer.y);
@@ -440,12 +445,34 @@ function brushTick(dt, instant = false) {
     const t = lastHit ? s / steps : 1;
     stamp(((lastHit ? lastHit.u + du * t : u) + 1) % 1, lastHit ? lastHit.v + dv * t : v, R, P, dt / steps);
   }
-  lastHit = { u, v };
+  lastHit = { u, v }; lastPoint.copy(hit.point);
   const crem = (crustRemovedFrame - c0), prem = (removedFrame - r0) - crem;
   const nW = hit.face ? hit.face.normal.clone().transformDirection(piece.matrixWorld) : new THREE.Vector3(0, 0, 1);
   emitAt(hit.point, nW, crem * (instant ? 3 : 1), prem * (instant ? 3 : 1));
   pointer.heldT += dt; everHeld += dt;
 }
+
+// a visible puff of dust + glints where the brush lands (every press, so the touch always answers at once)
+const benchPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), benchHit = new THREE.Vector3();
+function pressPuff() {
+  const hit = piece && slideIn === 0 && slideOut < 0 ? hitAt(pointer.x, pointer.y) : null;
+  if (!hit) {   // off the piece (or between pieces): a little puff of workshop dust where the finger lands
+    ndcV.set(pointer.x / innerWidth * 2 - 1, -(pointer.y / innerHeight) * 2 + 1); ray.setFromCamera(ndcV, camera);
+    if (!ray.ray.intersectPlane(benchPlane, benchHit)) return;
+    benchHit.y = Math.hypot(benchHit.x, benchHit.z) < 0.6 ? TABLE_TOP + 0.01 : 0.01;
+    emit(glints, 8, benchHit, { life: 0.45, spread: 0.12, size: 0.11, color: glintCol, vel: () => ({ x: (Math.random() - 0.5) * 0.6, y: 0.4, z: (Math.random() - 0.5) * 0.6 }) });
+    contact.position.copy(benchHit); contactT = 0.3; return;
+  }
+  const nW = hit.face ? hit.face.normal.clone().transformDirection(piece.matrixWorld) : new THREE.Vector3(0, 0, 1);
+  const crust = stage === 'crust';
+  if (crust) emit(flakes, 16, hit.point, { life: 1.4, spread: 0.06, size: 0.034, color: crustColor, vel: () => ({ x: nW.x * 1.2 + (Math.random() - 0.5) * 1.4, y: 0.5 + Math.random() * 1.2, z: nW.z * 1.2 + (Math.random() - 0.5) * 1.4 }) });
+  emit(glints, crust ? 6 : 12, hit.point, { life: 0.5, spread: 0.1, size: 0.12, color: glintCol, vel: () => ({ x: nW.x * 0.5, y: 0.2, z: nW.z * 0.5 }) });
+  // soft warm contact glow where the tool touches (fades in ~0.3 s)
+  contact.position.copy(hit.point).addScaledVector(nW, 0.03); contactT = 0.3;
+}
+const contact = new THREE.Sprite(new THREE.SpriteMaterial({ map: canvasTex(128, 128, (g, w) => { const r = g.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2); r.addColorStop(0, 'rgba(255,236,190,1)'); r.addColorStop(0.35, 'rgba(255,200,130,.45)'); r.addColorStop(1, 'rgba(255,180,100,0)'); g.fillStyle = r; g.fillRect(0, 0, w, w); }), blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true }));
+contact.scale.setScalar(0.42); contact.material.opacity = 0; contact.renderOrder = 5; scene.add(contact);
+let contactT = 0;
 
 // apprentice: a small buffing wheel on the right that walks up and down the piece
 const helper = new THREE.Group();
@@ -471,10 +498,15 @@ function helperTick(dt) {
 }
 
 // ---------- game flow ----------
+const flyFrom = new THREE.Vector3(), flyTo = new THREE.Vector3();
 let state = 'play', progress = 0, stage = 'crust', revealT = -1, slideIn = 0, slideOut = -1, playT = 0, lastAdT = -1e9;
 let away = false, panelOpen = null, firstSaleT = null;
 let sweepFx = 0, scrubR = 0, scrubP = 0;
 
+function updateGoalNext() {
+  const mi = cur.mi, n = SHAPES.filter((_, si) => S.shelf[`${mi}:${si}`]).length, goal = n < 4 ? 4 : SHAPES.length;
+  $('goalNext').textContent = n >= SHAPES.length ? `${METALS[mi].name} shelf complete` : `${METALS[mi].name} shelf ${n}/${goal} for a bonus`;
+}
 function setStageUI() {
   const crust = stage === 'crust';
   $('stage').textContent = crust ? METALS[cur.mi].verb : 'Polish it to a shine';
@@ -487,9 +519,9 @@ function updateProgress() {
   progress = clamp(1 - dSum / d0Sum, 0, 1);
   const crustLeft = crustSum / Math.max(1e-6, crust0);
   if (stage === 'crust' && crustLeft < 0.025) { stage = 'polish'; audio.play('ting'); setStageUI(); }
-  $('gaugeF').style.width = `${(progress / DONE_AT * 100).toFixed(1)}%`;
-  $('pct').textContent = `${Math.min(100, Math.floor(progress / DONE_AT * 100))}%`;
-  if (progress >= DONE_AT && state === 'play') startReveal();
+  $('gaugeF').style.width = `${Math.min(100, progress / cur.doneAt * 100).toFixed(1)}%`;
+  $('pct').textContent = `${Math.min(100, Math.floor(progress / cur.doneAt * 100))}%`;
+  if (progress >= cur.doneAt && state === 'play') startReveal();
 }
 
 function startReveal() {
@@ -497,6 +529,11 @@ function startReveal() {
   audio.play('reveal'); platform.happytime?.();
   const key = `${cur.mi}:${cur.si}`, isNew = !S.shelf[key];
   S.shelf[key] = (S.shelf[key] || 0) + 1; S.restored++; S.sales++;
+  const rowN = SHAPES.filter((_, si) => S.shelf[`${cur.mi}:${si}`]).length;
+  if (isNew && (rowN === 4 || rowN === SHAPES.length)) {
+    const bonus = cur.value * (rowN === 4 ? 4 : 10);
+    setTimeout(() => { showBanner(`${METALS[cur.mi].name} shelf ${rowN}/${SHAPES.length}!`, `Collector bonus +${bonus}`); audio.play('fanfare'); flyCoins(bonus); }, 1500);
+  }
   const val = cur.value;
   cur.sold = val; cur.isNew = isNew;
   if (firstSaleT == null) firstSaleT = playT;
@@ -521,8 +558,8 @@ $('btnDouble').addEventListener('click', async () => {
 let adPause = false; function setPausedForAd(v) { adPause = v; }
 
 function finishReveal() {
-  // piece leaves to the shelf, a new rusty one arrives
-  addShelfItem(cur.si, cur.mi);
+  // piece flies onto the shelf (it lands in slot 0), a new rusty one arrives
+  flyFrom.copy(piece.position); flyTo.copy(shelfSlots[0]).sub(holder.position);
   const prevMetals = metalsAvailable(S.restored - 1);
   slideOut = 0;
   const nm = metalsAvailable(S.restored);
@@ -581,12 +618,16 @@ function refreshUps() {
     b.classList.toggle('max', max); b.classList.toggle('off', !max && S.coins < c); b.classList.toggle('ready', !max && S.coins >= c);
   }
 }
+function placeAtPiece() { if (pointer.over) return; const p = tmpV.set(0, TABLE_TOP + cur.geo.h * 0.5, 0.4).project(camera); pointer.x = (p.x + 1) / 2 * innerWidth; pointer.y = (1 - p.y) / 2 * innerHeight; placeTool(); }
 function buy(u) {
   audio.unlock();
   const l = S.lv[u.id]; if (l >= u.max) return;
   const c = u.cost(l);
   if (S.coins < c) { audio.play('error'); const b = $(`up-${u.id}`); b.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }], { duration: 200 }); return; }
   S.coins -= c; S.lv[u.id]++; audio.play('buy'); refreshUps(); saveSoon();
+  if (u.id === 'size') { sizeTool(); toolEl.classList.add('on'); placeAtPiece(); toolEl.animate([{ transform: toolEl.style.transform + ' scale(1.35)' }, { transform: toolEl.style.transform }], { duration: 450, easing: 'cubic-bezier(.3,1.6,.5,1)' }); showPop('Bigger brush!', `Level ${S.lv.size}`); }
+  if (u.id === 'power') showPop('Stronger scrub!', `Rust comes off ${Math.round(28 * S.lv.power)}% faster`);
+  if (u.id === 'speed') showPop('Faster lathe!', `Level ${S.lv.speed}`);
   if (u.id === 'helper' && S.lv.helper === 1) showBanner('Apprentice hired!', 'Polishes the piece for you, even when you rest');
 }
 function updateShelfBtn() { const n = Object.keys(S.shelf).length; $('shelfN').textContent = `${n}/${METALS.length * SHAPES.length}`; }
@@ -637,8 +678,8 @@ function layout() {
   const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false);
   camera.aspect = w / h;
   // fit the piece (≈1.9 tall incl. table, ≈1.5 wide) with room for the HUD
-  const short = h < 500 && w > h, needH = short ? 1.75 : 2.25, needW = 1.55;
-  LOOK.y = short ? 0.7 : 0.62;
+  const short = h < 500 && w > h, needH = short ? 2.05 : 2.25, needW = 1.55;
+  LOOK.y = short ? 0.8 : 0.62;
   const vf = THREE.MathUtils.degToRad(camera.fov);
   const dH = needH / 2 / Math.tan(vf / 2), dW = needW / 2 / (Math.tan(vf / 2) * camera.aspect);
   const d = Math.max(dH, dW, 3.2);
@@ -650,7 +691,7 @@ function layout() {
   camera.updateProjectionMatrix();
   for (const s of [flakes, glints]) s.pts.material.uniforms.uScale.value = h * renderer.getPixelRatio() * 0.9;
 }
-addEventListener('resize', layout);
+addEventListener('resize', () => { layout(); sizeTool(); });
 
 // ---------- away / pause ----------
 function setAway(v) {
@@ -696,14 +737,17 @@ function frame(now) {
     const k = Math.min(1, dt * 4); let any = false;
     for (let i = 0; i < dirt.length; i++) if (dirt[i] > 0) { dirt[i] = Math.max(0, dirt[i] - k * Math.max(dirt[i], 0.05)); any = true; }
     if (any) { uploadMask(); recount(); }
+    if (slideOut < 0) piece.position.y = revealT < 0.5 ? Math.sin(revealT / 0.5 * Math.PI) * 0.06 : 0;
     pieceMat.userData.u.uSweep.value = revealT < 1.3 ? -0.15 + revealT / 1.3 * 1.3 : -1;
     pieceMat.userData.u.uGlow.value = Math.sin(Math.min(1, revealT / 1.8) * Math.PI);
     if (revealT < 1.3 && Math.random() < 0.7) { const y = Math.random() * cur.geo.h, a = Math.random() * TAU; const r = cur.geo.prof[Math.floor(Math.random() * MH)] + 0.02; emit(glints, 1, tmpV.set(Math.sin(a) * r, TABLE_TOP + y, Math.cos(a) * r), { life: 0.7, spread: 0.05, size: 0.09, color: glintCol, vel: () => ({ x: 0, y: 0.15, z: 0 }) }); }
     $('gaugeF').style.width = '100%'; $('pct').textContent = '100%';
     if (revealT > 2.0 && slideOut < 0) finishReveal();
     if (slideOut >= 0) {
-      slideOut += dt * 2.2; const e = Math.min(1, slideOut); piece.position.x = 2.6 * e * e; piece.position.y = Math.sin(e * Math.PI) * 0.15;
-      if (slideOut >= 1) { slideOut = -1; state = 'wait'; maybeMidgameAd().then(() => { state = 'play'; setupPiece(); }); }
+      slideOut += dt * 1.4; const e = Math.min(1, slideOut), k = e * e * (3 - 2 * e);
+      piece.position.lerpVectors(flyFrom, flyTo, k); piece.position.y += Math.sin(k * Math.PI) * 0.7;
+      piece.scale.setScalar(lerp(1, 0.24, k));
+      if (slideOut >= 1) { slideOut = -1; addShelfItem(cur.si, cur.mi); audio.play('place'); holder.remove(piece); piece.scale.setScalar(1); state = 'wait'; maybeMidgameAd().then(() => { state = 'play'; setupPiece(); }); }
     }
   }
   // scrub sound follows what is being removed right now
@@ -711,6 +755,8 @@ function frame(now) {
   scrubR = lerp(scrubR, tr, 0.5); scrubP = lerp(scrubP, tp, 0.5);
   audio.scrub(scrubR, scrubP, 0.9 + w / BASE_SPIN * 0.1);
   removedFrame = 0; crustRemovedFrame = 0;
+  if (contactT > 0) { contactT = Math.max(0, contactT - dt); } contact.scale.setScalar(0.42 + 0.5 * (contactT / 0.3)); contact.material.opacity = pointer.down && state === 'play' ? Math.max(contactT / 0.3, 0.35) : contactT / 0.3;
+  if (pointer.down && lastHit) contact.position.copy(lastPoint);
   updatePoints(flakes, dt, 5, 0.005); updatePoints(glints, dt, 0, 0);
   if (offerT > 0) { offerT -= dt; if (offerT <= 0) $('offer').classList.add('hidden'); }
   if (Math.round(shownCoins) !== Math.round(S.coins)) { shownCoins = S.coins; coinEl.textContent = fmt(S.coins); }
@@ -729,9 +775,10 @@ async function boot() {
   layout();
   // pre-build the shelf props from the save
   Object.keys(S.shelf).slice(-8).forEach((k) => { const [mi, si] = k.split(':').map(Number); addShelfItem(si, mi); });
+  SHAPES.forEach((_, i) => pieceGeo(i));
   setupPiece(); slideIn = 0; piece.position.set(0, 0, 0);
-  refreshUps(); updateShelfBtn(); shownCoins = S.coins; coinEl.textContent = fmt(S.coins);
-  renderer.compile(scene, camera);
+  sizeTool(); refreshUps(); updateShelfBtn(); shownCoins = S.coins; coinEl.textContent = fmt(S.coins);
+  { const warm = cleanMats.map((m, i) => { const w = new THREE.Mesh(pieceGeo(0).g, m); w.position.set(-50 + i, 0, 0); scene.add(w); return w; }); renderer.compile(scene, camera); warm.forEach((w) => scene.remove(w)); }
   bar.style.width = '100%';
   requestAnimationFrame((t) => { last = t; frame(t); });
   setTimeout(() => {
@@ -758,6 +805,7 @@ async function boot() {
         return null;
       },
       give(n) { addCoins(n); },
+      get ptr() { return { ...pointer }; }, get adPause() { return adPause; },
       hud(v) { $('hud').style.visibility = v ? '' : 'hidden'; $('hint').style.visibility = v ? '' : 'hidden'; $('tool').style.visibility = v ? '' : 'hidden'; },
       // store shots: force a piece and clean it half way (the right half of the turn shines)
       setPiece(mi, si) { lastPick = { si: -1, mi: -1 }; const keep = choosePiece; choosePieceOverride = { mi, si }; setupPiece(); choosePieceOverride = null; slideIn = 0; piece.position.set(0, 0, 0); },

@@ -13,6 +13,7 @@
     --teal: #3fa58f; --teal-d: #23705f; --red: #c8553d; --glow: #ffe7a3;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  body { -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; -webkit-touch-callout: none; }
   html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: none;
     background: radial-gradient(120% 90% at 50% 35%, #5a3a24 0%, #3a2416 45%, #1e120b 100%); color: var(--cream);
     font-family: Nunito, "Trebuchet MS", system-ui, sans-serif; }
@@ -52,6 +53,7 @@
   #coins.bump .ic { animation: bump .25s; }
   @keyframes bump { 50% { transform: scale(1.22); } }
 
+  #goal, #coins { pointer-events: none !important; }
   #goal { position: absolute; left: 50%; transform: translateX(-50%); padding: 6px 22px 8px; text-align: center; min-width: 210px; }
   #goal .nm { font-size: 18px; font-weight: 900; white-space: nowrap; }
   #goal .row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
@@ -60,6 +62,7 @@
   #goal .gauge i.pol { background: linear-gradient(90deg, #d9d2bd, #fff7de); }
   #goal .pct { font-size: 16px; font-weight: 900; min-width: 3.2ch; text-align: right; }
   #goal .stage { font-size: 14px; font-weight: 800; color: #e8cfa6; margin-top: 2px; }
+  #goal .next { font-size: 13px; font-weight: 800; color: #b9d9c4; margin-top: 1px; }
 
   #tr { position: absolute; right: max(10px, env(safe-area-inset-right)); display: flex; gap: 8px; }
   .rbtn { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; cursor: pointer; padding: 0; font-size: 28px; }
@@ -79,12 +82,13 @@
   @keyframes ready { 50% { box-shadow: inset 0 2px 0 rgba(255,255,255,.55), inset 0 -3px 0 rgba(110,72,20,.55), 0 3px 0 var(--ink), 0 0 18px rgba(255,220,120,.85); } }
   .up.max .c { background: transparent; }
 
-  #tool { position: fixed; left: 0; top: 0; z-index: 9; pointer-events: none; width: 64px; height: 64px; margin: -32px 0 0 -32px; opacity: 0; transition: opacity .15s; }
+  #tool { position: fixed; left: 0; top: 0; z-index: 9; pointer-events: none; width: 64px; height: 64px; margin: -32px 0 0 -32px; opacity: 0; }
   #tool.on { opacity: 1; }
-  #tool .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px dashed rgba(255,240,200,.7); transition: transform .06s; }
+  #tool .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px dashed rgba(255,240,200,.7); }
   #tool.down .ring { border-style: solid; border-color: rgba(255,240,200,.95); transform: scale(.88); background: rgba(255,230,170,.10); }
-  #tool .tic { position: absolute; left: 62%; top: 62%; width: 46px; height: 46px; filter: drop-shadow(0 3px 2px rgba(0,0,0,.5)); transition: transform .06s; }
-  #tool.down .tic { transform: translate(-4px, -4px) rotate(-8deg); }
+  #tool .tic { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; filter: drop-shadow(0 3px 2px rgba(0,0,0,.5)); }
+  #tool.down .tic { animation: scrub .16s ease-in-out infinite alternate; }
+  @keyframes scrub { from { transform: translate(-6px, -5px) rotate(-14deg); } to { transform: translate(3px, -1px) rotate(8deg); } }
 
   #hint { position: fixed; z-index: 11; pointer-events: none; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 8px; }
   #hint .hand { width: 64px; height: 64px; animation: press 1.2s ease-in-out infinite; filter: drop-shadow(0 4px 3px rgba(0,0,0,.5)); }
@@ -98,7 +102,7 @@
   #pop.go .card { animation: popin .5s cubic-bezier(.2,1.6,.5,1); }
   @keyframes popin { 0% { transform: scale(.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 
-  #offer { position: fixed; z-index: 13; left: 50%; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 120px); transform: translateX(-50%); }
+  #offer { position: fixed; z-index: 13; right: max(10px, env(safe-area-inset-right)); top: calc(max(10px, env(safe-area-inset-top)) + 64px); }
   .btn { cursor: pointer; padding: 8px 18px 10px; font-size: 18px; font-weight: 900; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
   .btn.ad { background: linear-gradient(180deg, #6fd0a8, var(--teal) 50%, var(--teal-d)); color: #08261e; }
   .btn small { font-size: 13px; opacity: .8; }
@@ -139,9 +143,10 @@
   @media (max-height: 500px) and (min-aspect-ratio: 1/1) {
     #ups { left: auto; transform: translateY(-42%); top: 50%; bottom: auto; right: max(8px, env(safe-area-inset-right)); flex-direction: column; gap: 6px; }
     .up { width: 186px; white-space: nowrap; flex-direction: row; align-items: center; text-align: left; padding: 5px 10px 6px 8px; gap: 7px; }
+    #offer { right: auto; left: max(10px, env(safe-area-inset-left)); top: calc(max(10px, env(safe-area-inset-top)) + 56px); }
+    #goal .next { display: none; } #goal .stage { font-size: 13px; }
     .up .ic { height: auto; font-size: 22px; } .up .tx { align-items: flex-start; } .up .t { font-size: 14px; } .up .l { font-size: 12px; }
     .up .c { margin: 0 0 0 auto; font-size: 14px; padding: 1px 6px 2px; } .up .c svg { width: 15px; height: 15px; }
-    #offer { bottom: max(10px, env(safe-area-inset-bottom)); left: 40%; }
   }
 </style>
 
@@ -157,6 +162,7 @@
     <div class="nm" id="pieceName">Iron Cup</div>
     <div class="row"><div class="gauge"><i id="gaugeF"></i></div><div class="pct" id="pct">0%</div></div>
     <div class="stage" id="stage">Remove the rust</div>
+    <div class="next" id="goalNext"></div>
   </div>
   <div id="tr">
     <button id="btnShelf" class="rbtn plate" aria-label="Shelf"><svg class="i" viewBox="0 0 32 32"><use href="#i-shelf"/></svg><span id="shelfN">0/40</span></button>
