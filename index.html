@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Lathe &amp; Luster</title>
+<style>
+  @font-face { font-family: Nunito; font-weight: 700 900; font-display: swap; src: url(./assets/fonts/nunito-latin.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+2605, U+FEFF, U+FFFD; }
+  :root {
+    --ink: #24160d; --walnut: #2c1b12; --walnut2: #3d2618;
+    --brass: #e7c16a; --brass2: #c9973c; --brass-d: #8a6224; --cream: #fff4dc; --paper: #f6e7c4;
+    --teal: #3fa58f; --teal-d: #23705f; --red: #c8553d; --glow: #ffe7a3;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: none;
+    background: radial-gradient(120% 90% at 50% 35%, #5a3a24 0%, #3a2416 45%, #1e120b 100%); color: var(--cream);
+    font-family: Nunito, "Trebuchet MS", system-ui, sans-serif; }
+  canvas#game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+  button { font-family: inherit; color: inherit; }
+  .hidden { display: none !important; }
+  svg.i { width: 1em; height: 1em; display: inline-block; vertical-align: -0.15em; overflow: visible; }
+
+  /* engraved brass plate */
+  .plate { background: linear-gradient(180deg, #f3d891 0%, var(--brass) 38%, var(--brass2) 100%); color: var(--ink);
+    border: 2px solid var(--ink); border-radius: 12px;
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.55), inset 0 -3px 0 rgba(110,72,20,.55), 0 3px 0 var(--ink), 0 6px 14px rgba(0,0,0,.35); position: relative; }
+  .plate::before, .plate::after { content: ''; position: absolute; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #fff3c4, #7a5419 70%); box-shadow: 0 0 0 1px rgba(36,22,13,.6); }
+  .plate::before { left: 6px; } .plate::after { right: 6px; }
+  .dark { background: linear-gradient(180deg, #4a2f1e, #2e1c12); color: var(--cream); border: 2px solid var(--ink); border-radius: 12px;
+    box-shadow: inset 0 1px 0 rgba(255,220,160,.18), 0 3px 0 var(--ink), 0 6px 14px rgba(0,0,0,.35); }
+
+  #loader { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px;
+    background: radial-gradient(120% 90% at 50% 35%, #5a3a24 0%, #3a2416 45%, #1e120b 100%); }
+  .logo { text-align: center; line-height: .95; }
+  .logo .a { font-size: clamp(42px, 9vw, 84px); font-weight: 900; letter-spacing: 1px;
+    background: linear-gradient(180deg, #fff1c2 0%, #e7c16a 45%, #a8742a 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 3px 0 #1a0f08) drop-shadow(0 8px 12px rgba(0,0,0,.5)); }
+  .logo .b { display: block; font-size: clamp(15px, 2.6vw, 20px); font-weight: 800; color: #d9b98a; letter-spacing: 6px; margin-top: 10px; text-transform: uppercase; }
+  #bar { width: min(300px, 70vw); height: 14px; border-radius: 8px; background: #1a0f08; border: 2px solid #6b4a26; overflow: hidden; }
+  #bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #a8742a, #f3d891); transition: width .2s; }
+
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  #hud > * { pointer-events: auto; }
+  .safe-t { top: max(10px, env(safe-area-inset-top)); }
+
+  #coins, #goal, #tr { top: max(10px, env(safe-area-inset-top)); }
+  #coins { position: absolute; left: max(10px, env(safe-area-inset-left)); padding: 6px 16px 7px 8px; display: flex; align-items: center; gap: 8px; }
+  #coins .ic { width: 34px; height: 34px; }
+  #coins .big { font-size: 28px; font-weight: 900; line-height: 1; min-width: 2ch; }
+  #coins.bump .ic { animation: bump .25s; }
+  @keyframes bump { 50% { transform: scale(1.22); } }
+
+  #goal { position: absolute; left: 50%; transform: translateX(-50%); padding: 6px 22px 8px; text-align: center; min-width: 210px; }
+  #goal .nm { font-size: 18px; font-weight: 900; white-space: nowrap; }
+  #goal .row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  #goal .gauge { flex: 1; height: 12px; border-radius: 7px; background: #1a0f08; border: 2px solid var(--ink); overflow: hidden; }
+  #goal .gauge i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #c46a2c, #e9a24a); transition: width .08s linear; }
+  #goal .gauge i.pol { background: linear-gradient(90deg, #d9d2bd, #fff7de); }
+  #goal .pct { font-size: 16px; font-weight: 900; min-width: 3.2ch; text-align: right; }
+  #goal .stage { font-size: 14px; font-weight: 800; color: #e8cfa6; margin-top: 2px; }
+
+  #tr { position: absolute; right: max(10px, env(safe-area-inset-right)); display: flex; gap: 8px; }
+  .rbtn { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; cursor: pointer; padding: 0; font-size: 28px; }
+  .rbtn:active, .up:active, .btn:active { transform: translateY(2px); }
+  #btnShelf { width: auto; padding: 0 12px; gap: 6px; display: flex; align-items: center; font-size: 26px; }
+  #btnShelf span { font-size: 16px; font-weight: 900; }
+
+  #ups { position: absolute; left: 50%; transform: translateX(-50%); bottom: max(10px, env(safe-area-inset-bottom)); display: flex; gap: 8px; }
+  .up { width: 104px; padding: 5px 6px 6px; cursor: pointer; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .up .ic { font-size: 24px; line-height: 1; height: 26px; }
+  .up .t { font-size: 15px; font-weight: 900; line-height: 1.1; }
+  .up .l { font-size: 13px; font-weight: 800; opacity: .8; }
+  .up .c { margin-top: 3px; font-size: 16px; font-weight: 900; display: flex; align-items: center; gap: 3px; padding: 1px 10px 2px; border-radius: 9px; background: rgba(36,22,13,.18); }
+  .up .c svg { width: 18px; height: 18px; }
+  .up.off { filter: saturate(.6) brightness(.82); } .up.off .c { color: #6a2a14; }
+  .up.ready { animation: ready 1.4s ease-in-out infinite; }
+  @keyframes ready { 50% { box-shadow: inset 0 2px 0 rgba(255,255,255,.55), inset 0 -3px 0 rgba(110,72,20,.55), 0 3px 0 var(--ink), 0 0 18px rgba(255,220,120,.85); } }
+  .up.max .c { background: transparent; }
+
+  #tool { position: fixed; left: 0; top: 0; z-index: 9; pointer-events: none; width: 64px; height: 64px; margin: -32px 0 0 -32px; opacity: 0; transition: opacity .15s; }
+  #tool.on { opacity: 1; }
+  #tool .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px dashed rgba(255,240,200,.7); transition: transform .06s; }
+  #tool.down .ring { border-style: solid; border-color: rgba(255,240,200,.95); transform: scale(.88); background: rgba(255,230,170,.10); }
+  #tool .tic { position: absolute; left: 62%; top: 62%; width: 46px; height: 46px; filter: drop-shadow(0 3px 2px rgba(0,0,0,.5)); transition: transform .06s; }
+  #tool.down .tic { transform: translate(-4px, -4px) rotate(-8deg); }
+
+  #hint { position: fixed; z-index: 11; pointer-events: none; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  #hint .hand { width: 64px; height: 64px; animation: press 1.2s ease-in-out infinite; filter: drop-shadow(0 4px 3px rgba(0,0,0,.5)); }
+  @keyframes press { 0%, 100% { transform: translate(12px, 10px); } 45%, 70% { transform: translate(0, 0) scale(.92); } }
+  #hint .txt { padding: 6px 16px 8px; font-size: 20px; font-weight: 900; white-space: nowrap; }
+
+  #pop { position: fixed; z-index: 12; left: 50%; top: 18%; transform: translateX(-50%); pointer-events: none; text-align: center; }
+  #pop .card { padding: 10px 26px 12px; display: inline-block; }
+  #pop .h { font-size: 26px; font-weight: 900; white-space: nowrap; }
+  #pop .s { font-size: 16px; font-weight: 800; opacity: .85; }
+  #pop.go .card { animation: popin .5s cubic-bezier(.2,1.6,.5,1); }
+  @keyframes popin { 0% { transform: scale(.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+  #offer { position: fixed; z-index: 13; left: 50%; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 120px); transform: translateX(-50%); }
+  .btn { cursor: pointer; padding: 8px 18px 10px; font-size: 18px; font-weight: 900; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .btn.ad { background: linear-gradient(180deg, #6fd0a8, var(--teal) 50%, var(--teal-d)); color: #08261e; }
+  .btn small { font-size: 13px; opacity: .8; }
+
+  .float { position: fixed; z-index: 14; pointer-events: none; font-weight: 900; font-size: 24px; color: var(--glow); white-space: nowrap;
+    text-shadow: 0 2px 0 var(--ink), 2px 0 0 var(--ink), -2px 0 0 var(--ink), 0 -2px 0 var(--ink); transform: translate(-50%, -50%); }
+  .fcoin { position: fixed; z-index: 14; width: 26px; height: 26px; pointer-events: none; margin: -13px 0 0 -13px; }
+
+  #veil { position: fixed; inset: 0; z-index: 20; background: rgba(15,8,4,.6); }
+  .panel { position: fixed; z-index: 21; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, 94vw); max-height: 92vh; overflow: auto; padding: 16px 16px 18px; }
+  .panel h2 { margin: 0 0 4px; font-size: 24px; font-weight: 900; text-align: center; }
+  .panel .sub { text-align: center; font-size: 15px; font-weight: 800; opacity: .8; margin-bottom: 10px; }
+  .panel .x { position: absolute; right: 10px; top: 10px; width: 40px; height: 40px; border-radius: 10px; font-size: 22px; cursor: pointer; padding: 0; }
+  #shelfGrid { display: grid; grid-template-columns: repeat(var(--cols, 8), 1fr); gap: 6px; }
+  .cell { aspect-ratio: 1; border-radius: 8px; background: #1a0f08; border: 2px solid #5a3c22; display: grid; place-items: center; position: relative; overflow: hidden; }
+  .cell svg { width: 78%; height: 78%; }
+  .cell b { position: absolute; right: 3px; bottom: 1px; font-size: 12px; font-weight: 900; color: var(--cream); text-shadow: 0 1px 0 #000; }
+  .rowlab { grid-column: 1 / -1; font-size: 15px; font-weight: 900; margin: 6px 0 0; display: flex; justify-content: space-between; }
+  .rowlab.lock { opacity: .55; }
+  .toggles { display: flex; flex-direction: column; gap: 10px; align-items: stretch; margin-top: 8px; }
+  .toggles .btn { justify-content: space-between; }
+
+  #banner { position: fixed; z-index: 15; left: 50%; top: 34%; transform: translate(-50%, -50%); text-align: center; pointer-events: none; }
+  #banner .card { padding: 12px 28px 14px; }
+  #banner .h { font-size: 28px; font-weight: 900; }
+  #banner .s { font-size: 17px; font-weight: 800; }
+  #banner.go .card { animation: popin .5s cubic-bezier(.2,1.6,.5,1); }
+
+  .up .tx { display: flex; flex-direction: column; align-items: center; }
+  @media (max-aspect-ratio: 4/5) { #goal { top: calc(max(10px, env(safe-area-inset-top)) + 64px); } }
+  @media (max-width: 560px), (max-height: 460px) {
+    .up { width: 92px; padding: 5px 4px 6px; } .up .ic { font-size: 24px; height: 26px; } .up .t { font-size: 14px; } .up .l { font-size: 12px; } .up .c { font-size: 15px; }
+    #coins .big { font-size: 24px; } #coins .ic { width: 28px; height: 28px; }
+    .rbtn { width: 46px; height: 46px; font-size: 24px; }
+    #goal { min-width: 170px; padding: 5px 16px 6px; } #goal .nm { font-size: 16px; }
+  }
+  @media (max-width: 430px) { .up { width: 84px; } #ups { gap: 5px; } }
+  @media (max-height: 500px) and (min-aspect-ratio: 1/1) {
+    #ups { left: auto; transform: translateY(-42%); top: 50%; bottom: auto; right: max(8px, env(safe-area-inset-right)); flex-direction: column; gap: 6px; }
+    .up { width: 186px; white-space: nowrap; flex-direction: row; align-items: center; text-align: left; padding: 5px 10px 6px 8px; gap: 7px; }
+    .up .ic { height: auto; font-size: 22px; } .up .tx { align-items: flex-start; } .up .t { font-size: 14px; } .up .l { font-size: 12px; }
+    .up .c { margin: 0 0 0 auto; font-size: 14px; padding: 1px 6px 2px; } .up .c svg { width: 15px; height: 15px; }
+    #offer { bottom: max(10px, env(safe-area-inset-bottom)); left: 40%; }
+  }
+</style>
+
+<script>window.PLATFORM = "web";</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="loader"><div class="logo"><span class="a">Lathe &amp; Luster</span><span class="b">antique restorer</span></div><div id="bar"><i></i></div></div>
+
+<div id="hud" class="hidden">
+  <div id="coins" class="plate"><svg class="ic" viewBox="0 0 32 32"><use href="#i-coin"/></svg><span class="big" id="coinN">0</span></div>
+  <div id="goal" class="dark">
+    <div class="nm" id="pieceName">Iron Cup</div>
+    <div class="row"><div class="gauge"><i id="gaugeF"></i></div><div class="pct" id="pct">0%</div></div>
+    <div class="stage" id="stage">Remove the rust</div>
+  </div>
+  <div id="tr">
+    <button id="btnShelf" class="rbtn plate" aria-label="Shelf"><svg class="i" viewBox="0 0 32 32"><use href="#i-shelf"/></svg><span id="shelfN">0/40</span></button>
+    <button id="btnSet" class="rbtn dark" aria-label="Settings"><svg class="i" viewBox="0 0 32 32"><use href="#i-gear"/></svg></button>
+  </div>
+  <div id="ups"></div>
+</div>
+
+<div id="tool"><div class="ring"></div><svg class="tic" id="toolIc" viewBox="0 0 48 48"><use href="#i-brush"/></svg></div>
+<div id="hint" class="hidden"><svg class="hand" viewBox="0 0 64 64"><use href="#i-hand"/></svg><div class="txt plate">Hold on the piece</div></div>
+<div id="pop" class="hidden"><div class="card plate"><div class="h" id="popH">Sold!</div><div class="s" id="popS"></div></div></div>
+<div id="banner" class="hidden"><div class="card plate"><div class="h" id="banH"></div><div class="s" id="banS"></div></div></div>
+<div id="offer" class="hidden"><button class="btn ad" id="btnDouble"><svg class="i" viewBox="0 0 32 32"><use href="#i-play"/></svg>Double this sale <small>ad</small></button></div>
+
+<div id="veil" class="hidden"></div>
+<div id="shelf" class="panel dark hidden"><button class="x plate" data-close>&#x2715;</button><h2>Your shelf</h2><div class="sub" id="shelfSub"></div><div id="shelfGrid"></div></div>
+<div id="settings" class="panel dark hidden" style="width:min(340px,92vw)"><button class="x plate" data-close>&#x2715;</button><h2>Settings</h2>
+  <div class="toggles"><button class="btn plate" id="tSound">Sound <span>On</span></button><button class="btn plate" id="tMusic">Music <span>On</span></button></div></div>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <radialGradient id="gc" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#fff2b8"/><stop offset=".55" stop-color="#e9b740"/><stop offset="1" stop-color="#9a6a17"/></radialGradient>
+    <linearGradient id="gb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d9a35a"/><stop offset="1" stop-color="#8a5a24"/></linearGradient>
+  </defs>
+  <symbol id="i-coin" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13.5" fill="url(#gc)" stroke="#24160d" stroke-width="2"/><circle cx="16" cy="16" r="9" fill="none" stroke="#9a6a17" stroke-width="1.6"/><path d="M12 19.5 16 9l4 10.5M13.4 16h5.2" fill="none" stroke="#7a4f10" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shelf" viewBox="0 0 32 32"><path d="M4 26h24M4 15h24" stroke="#24160d" stroke-width="3" stroke-linecap="round"/><path d="M8 15c0-4 1-7 3-7s3 3 3 7zM17 15v-5h6v5zM9 26c-1-3 0-6 3-6s4 3 3 6zM19 26l1-6h4l1 6z" fill="#24160d"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 32 32"><path d="M16 4l2.2 3.2 3.8-1 .6 3.9 3.6 1.5-1.4 3.6 2.3 3.1-3.2 2.2.4 3.9-3.9.4-1.7 3.5-3.5-1.8-3.5 1.8-1.7-3.5-3.9-.4.4-3.9-3.2-2.2 2.3-3.1-1.4-3.6 3.6-1.5.6-3.9 3.8 1z" fill="#e7c16a" stroke="#24160d" stroke-width="1.6" stroke-linejoin="round"/><circle cx="16" cy="16" r="4.5" fill="#3d2618" stroke="#24160d" stroke-width="1.6"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 64 64"><path d="M26 34V12a4.5 4.5 0 0 1 9 0v16l14 3.6c3.6 1 5.5 4.2 4.6 7.8L50 54H28L15 39.5c-2.2-2.4-1.6-5.6 1.4-6.8 2-.8 4-.3 5.6 1.4z" fill="#fff4dc" stroke="#24160d" stroke-width="3" stroke-linejoin="round"/><path d="M35 28v9M42 30v8" stroke="#24160d" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-brush" viewBox="0 0 48 48"><rect x="20" y="4" width="8" height="22" rx="3" fill="url(#gb)" stroke="#24160d" stroke-width="2"/><rect x="12" y="24" width="24" height="9" rx="2" fill="#6b4a2c" stroke="#24160d" stroke-width="2"/><path d="M14 33v10M18 33v11M22 33v10M26 33v11M30 33v10M34 33v11" stroke="#c9c2b5" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-cloth" viewBox="0 0 48 48"><path d="M8 30c4-12 10-20 20-22 6-1 12 3 12 9 0 8-8 9-8 15 0 5 5 8 4 10H12c-3 0-6-6-4-12z" fill="#f2e6cc" stroke="#24160d" stroke-width="2.2" stroke-linejoin="round"/><path d="M14 34c4-1 8-4 10-9M18 40c5-1 9-4 11-8" fill="none" stroke="#c9b48a" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-size" viewBox="0 0 32 32"><circle cx="16" cy="16" r="11" fill="none" stroke="#24160d" stroke-width="2.6" stroke-dasharray="4 3"/><circle cx="16" cy="16" r="5" fill="#24160d"/></symbol>
+  <symbol id="i-power" viewBox="0 0 32 32"><path d="M18 3 7 18h8l-2 11 12-16h-8z" fill="#24160d"/></symbol>
+  <symbol id="i-speed" viewBox="0 0 32 32"><path d="M26 16a10 10 0 1 1-4-8" fill="none" stroke="#24160d" stroke-width="3" stroke-linecap="round"/><path d="M19 4l5 4-6 3z" fill="#24160d"/><circle cx="16" cy="16" r="3" fill="#24160d"/></symbol>
+  <symbol id="i-help" viewBox="0 0 32 32"><circle cx="16" cy="9" r="5" fill="#24160d"/><path d="M6 28c0-7 4-11 10-11s10 4 10 11z" fill="#24160d"/><path d="M23 15l6-6" stroke="#24160d" stroke-width="3" stroke-linecap="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 32 32"><rect x="3" y="6" width="26" height="20" rx="5" fill="#08261e"/><path d="M13 11v10l8-5z" fill="#6fd0a8"/></symbol>
+</svg>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

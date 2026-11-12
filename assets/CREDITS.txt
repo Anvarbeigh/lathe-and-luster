@@ -1,0 +1,5 @@
+Lathe & Luster — credits
+3D pieces, workshop, UI and icons: made in code for this game (no third-party art).
+UI sounds (coin, sold, unlock, open, close, error, click, whoosh, place, buy): Kenney "Interface Sounds" (www.kenney.nl), CC0 1.0, normalised and trimmed.
+Scrub loops, reveal bells, fanfare and the music loop: synthesised for this game (tools/make_sfx.py).
+Font: Nunito (SIL Open Font License 1.1, fonts/OFL.txt). Engine: three.js r160, MIT License.
