@@ -152,15 +152,16 @@ const CN = 128, crustNoise = fbm(CN, 5, [4, 8, 16]);
 // ---------- dirt mask ----------
 const dirt = new Float32Array(MW * MH);        // 1 = thick crust, 0.5 = bare dull metal, 0 = mirror polish
 const dirt0 = new Float32Array(MW * MH);
-const maskBytes = new Uint8Array(MW * MH);
-const maskTex = new THREE.DataTexture(maskBytes, MW, MH, THREE.RedFormat, THREE.UnsignedByteType);
+const hard = new Float32Array(MW * MH);         // 0..1 stubborn-crust strength (3.5x tougher at 1)
+const maskBytes = new Uint8Array(MW * MH * 2);
+const maskTex = new THREE.DataTexture(maskBytes, MW, MH, THREE.RGFormat, THREE.UnsignedByteType);
 maskTex.wrapS = THREE.RepeatWrapping; maskTex.wrapT = THREE.ClampToEdgeWrapping; maskTex.magFilter = maskTex.minFilter = THREE.LinearFilter; maskTex.needsUpdate = true;
 let maskDirty = true;
 const rowW = new Float32Array(MH);              // 1 = row the player can see/reach
 let wSum = 1, d0Sum = 1, dSum = 1, crustSum = 0, crust0 = 1;
 
 function uploadMask() {
-  for (let i = 0; i < dirt.length; i++) maskBytes[i] = dirt[i] * 255;
+  for (let i = 0; i < dirt.length; i++) { maskBytes[i * 2] = dirt[i] * 255; maskBytes[i * 2 + 1] = dirt[i] > 0.5 ? hard[i] * 255 : 0; }
   maskTex.needsUpdate = true; maskDirty = false;
 }
 function recount() {
@@ -175,17 +176,30 @@ function pieceMaterial() {
   m.userData.u = {
     uMask: { value: maskTex }, uMetal: { value: new THREE.Color() }, uDull: { value: new THREE.Color() },
     uC0: { value: new THREE.Color() }, uC1: { value: new THREE.Color() }, uC2: { value: new THREE.Color() },
-    uSweep: { value: -1 }, uGlow: { value: 0 },
+    uSweep: { value: -1 }, uGlow: { value: 0 }, uEngr: { value: new THREE.Vector4(0, 0, 0, 0) },
   };
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, m.userData.u);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform sampler2D uMask; uniform vec3 uMetal, uDull, uC0, uC1, uC2; uniform float uSweep, uGlow;`)
+        uniform sampler2D uMask; uniform vec3 uMetal, uDull, uC0, uC1, uC2; uniform float uSweep, uGlow; uniform vec4 uEngr;
+        // engraved band between v0 (x) and v1 (y); z = pattern 1 rings / 2 leaves / 3 waves; w = strength
+        float engrave(vec2 uv) {
+          if (uEngr.w <= 0.0) return 0.0;
+          float inb = smoothstep(uEngr.x, uEngr.x + 0.01, uv.y) * (1.0 - smoothstep(uEngr.y - 0.01, uEngr.y, uv.y));
+          float t = (uv.y - uEngr.x) / max(0.001, uEngr.y - uEngr.x);
+          float g;
+          if (uEngr.z < 1.5) g = abs(sin(t * 3.14159 * 7.0));
+          else if (uEngr.z < 2.5) g = abs(sin(uv.x * 6.2832 * 18.0 + sin(t * 6.2832) * 2.2)) * abs(sin(t * 3.14159));
+          else g = abs(sin(uv.x * 6.2832 * 10.0 + t * 9.0) + 0.6 * sin(t * 18.0));
+          float edge = (1.0 - smoothstep(0.02, 0.06, t)) + smoothstep(0.94, 0.98, t);
+          return inb * clamp(1.0 - smoothstep(0.12, 0.3, g) + edge, 0.0, 1.0) * uEngr.w;
+        }`)
       .replace('#include <map_fragment>', `
         vec3 nz = texture2D(map, vMapUv * vec2(4.0, 2.0)).rgb;
         vec3 nz2 = texture2D(map, vMapUv * vec2(14.0, 7.0)).rgb;
-        float dm = texture2D(uMask, vMapUv).r;
+        vec2 mk = texture2D(uMask, vMapUv).rg; float dm = mk.r; float hd = mk.g;
+        float eg = engrave(vMapUv);
         float crust = smoothstep(0.5, 0.56, dm + (nz2.g - 0.5) * 0.05);
         float dull = clamp(dm / 0.5, 0.0, 1.0);
         dull = smoothstep(0.0, 1.0, dull);
@@ -195,14 +209,19 @@ function pieceMaterial() {
         crustCol *= 0.8 + 0.3 * nz2.r;
         float edge = crust * (1.0 - smoothstep(0.56, 0.68, dm));
         vec3 metalCol = mix(uMetal, uDull, dull * (0.75 + 0.25 * nz.g));
+        // stubborn crust: raised, lighter crusty top with a dark ring around it
+        float hcore = smoothstep(0.35, 0.8, hd), hring = smoothstep(0.05, 0.3, hd) * (1.0 - smoothstep(0.3, 0.55, hd));
+        crustCol = mix(crustCol, (uC2 * 1.15 + vec3(0.08)) * (0.7 + 0.5 * nz2.r), hcore * 0.8);
+        crustCol *= 1.0 - hring * 0.6;
+        metalCol *= 1.0 - eg * 0.7 * (1.0 - dull * 0.6);
         diffuseColor.rgb = mix(metalCol, crustCol, crust);
         diffuseColor.rgb *= 1.0 - edge * 0.5;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(mix(0.07, 0.5 + nz2.g * 0.2, dull), 0.95, crust);`)
+        roughnessFactor = mix(mix(0.07 + eg * 0.2, 0.5 + nz2.g * 0.2, dull), 0.95, crust);`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
         metalnessFactor = mix(1.0, 0.0, crust);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        normal = normalize(normal + crust * (nz2 - 0.5) * 0.9 + (1.0 - crust) * dull * (nz - 0.5) * 0.12);`)
+        normal = normalize(normal + crust * (nz2 - 0.5) * (0.9 + hd * 1.6) + (1.0 - crust) * dull * (nz - 0.5) * 0.12 + (1.0 - crust) * eg * (nz2 - 0.5) * 0.5);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         float band = uSweep < -0.5 ? 0.0 : exp(-pow((vMapUv.y - uSweep) * 9.0, 2.0));
         totalEmissiveRadiance += vec3(1.0, 0.9, 0.7) * (band * 0.8 + uGlow * 0.12) * (1.0 - crust);`);
@@ -231,11 +250,12 @@ function pieceGeo(si) {
   return (geoCache[si] = { g, p, prof, profY, h });
 }
 const holder = new THREE.Group(); scene.add(holder); holder.position.y = TABLE_TOP;
-let piece = null, proxy = null, cur = null;   // cur = { si, mi, geo, value }
+let piece = null, proxy = null, cur = null, patches = [];   // cur = { si, mi, geo, value }
 
 let choosePieceOverride = null, frozen = false;
 function choosePiece() {
   if (choosePieceOverride) return choosePieceOverride;
+  if (S.order && S.order.wait <= 0) return { si: S.order.si, mi: S.order.mi, order: true };
   const n = S.restored, nm = metalsAvailable(n), ns = shapesAvailable(n);
   if (n === 0) return { si: 0, mi: 0 };
   for (let mi = nm - 1; mi >= 0; mi--) for (let si = 0; si < ns; si++) if (!S.shelf[`${mi}:${si}`] && !(mi === lastPick.mi && si === lastPick.si)) return { si, mi };
@@ -246,7 +266,7 @@ function choosePiece() {
 let lastPick = { si: -1, mi: -1 };
 
 function setupPiece() {
-  const { si, mi } = choosePiece(); lastPick = { si, mi };
+  const pick = choosePiece(), { si, mi } = pick; lastPick = { si, mi };
   const geo = pieceGeo(si), mt = METALS[mi];
   if (piece) holder.remove(piece);
   piece = new THREE.Mesh(geo.g, pieceMat); piece.castShadow = true; piece.receiveShadow = true;
@@ -257,7 +277,7 @@ function setupPiece() {
   u.uMetal.value.set(mt.metal); u.uDull.value.set(mt.dull); u.uC0.value.set(mt.crust[0]); u.uC1.value.set(mt.crust[1]); u.uC2.value.set(mt.crust[2]);
   u.uSweep.value = -1; u.uGlow.value = 0;
   const value = Math.round(SHAPES[si].base * mt.mult * (1 + Math.min(1, S.restored / 40) * 0.5));
-  cur = { si, mi, geo, value, doneAt: S.restored === 0 ? 0.82 : S.restored === 1 ? 0.88 : DONE_AT, tough: mt.tough * (S.restored === 0 ? 0.42 : S.restored === 1 ? 0.75 : 1) * (1 + si * 0.04) };
+  cur = { si, mi, geo, value, order: !!pick.order, doneAt: S.restored === 0 ? 0.82 : S.restored === 1 ? 0.88 : DONE_AT, tough: mt.tough * (S.restored === 0 ? 0.42 : S.restored === 1 ? 0.75 : 1) * (1 + si * 0.04) };
   // visibility per row (cached per shape): for every other row, a ray from the camera to the front and back point of
   // that ring; the row counts if that ray really lands on it (inside walls are seen through the opening)
   holder.updateMatrixWorld(true);
@@ -287,11 +307,39 @@ function setupPiece() {
       if (rowW[y]) { wSum += MW; d0Sum += d; }
     }
   }
+  // stubborn crust patches (none on the first piece, one on the second)
+  hard.fill(0); patches = [];
+  const pr = rnd(S.restored * 977 + 31), np = S.restored === 0 ? 0 : S.restored === 1 ? 1 : 2 + Math.floor(pr() * 3);
+  const rows = []; for (let y = 4; y < MH - 4; y++) if (rowW[y] && geo.prof[y] > 0.12) rows.push(y);
+  for (let k = 0; k < np && rows.length; k++) {
+    const cy = rows[Math.floor(pr() * rows.length)], cx = Math.floor(pr() * MW);
+    const r = Math.max(0.05, geo.prof[cy]), ru = clamp(0.15 / (TAU * r) * MW, 7, 34), rv = clamp(0.17 / 1.9 * (MH - 1), 6, 14);
+    const idx = [];
+    for (let y = Math.max(0, Math.floor(cy - rv)); y <= Math.min(MH - 1, Math.ceil(cy + rv)); y++) for (let xi = Math.floor(cx - ru); xi <= Math.ceil(cx + ru); xi++) {
+      const dx = (xi - cx) / ru, dy = (y - cy) / rv, wob = 1 + 0.25 * Math.sin(Math.atan2(dy, dx) * 3 + k), q = (dx * dx + dy * dy) * wob; if (q >= 1) continue;
+      const i = y * MW + ((xi % MW) + MW) % MW; const h = Math.min(1, (1 - q) * 2.2);
+      if (h > hard[i]) hard[i] = h; dirt[i] = Math.max(dirt[i], 0.62 + 0.38 * h); if (q < 0.8) idx.push(i);
+    }
+    if (rowW[cy]) d0Sum = 0;   // recomputed below
+    patches.push({ idx: Int32Array.from(idx), cx, cy, total: 0, popped: false });
+  }
+  if (np) { d0Sum = 0; for (let y = 0; y < MH; y++) if (rowW[y]) { const o = y * MW; for (let x = 0; x < MW; x++) d0Sum += dirt[o + x]; } }
+  for (const pt of patches) { let t = 0; for (const i of pt.idx) t += Math.max(0, dirt[i] - 0.5); pt.total = t; }
+  // grade: plain / fine / masterwork (fixed odds, first two pieces are plain)
+  const gr = S.restored < 2 ? 0 : (pr() < 0.62 ? 0 : pr() < 0.75 ? 1 : 2);
+  cur.grade = gr;
+  const u2 = pieceMat.userData.u;
+  if (gr) {
+    let best = 0, by = MH >> 1; for (let y = 10; y < MH - 10; y++) if (rowW[y] && geo.prof[y] > best) { best = geo.prof[y]; by = y; }
+    const half = gr === 2 ? 0.11 : 0.07, v = by / (MH - 1);
+    u2.uEngr.value.set(clamp(v - half, 0.02, 0.9), clamp(v + half, 0.1, 0.98), 1 + Math.floor(pr() * 3), gr === 2 ? 1 : 0.75);
+  } else u2.uEngr.value.set(0, 0, 0, 0);
+  cur.engrHinted = false;
   recount(); crust0 = crustSum; uploadMask();
   progress = 0; stage = 'crust'; revealT = -1; helperV = 0.3;
   piece.position.set(-2.4, 0, 0); slideIn = 1;
   $('pieceName').textContent = `${mt.name} ${SHAPES[si].name}`;
-  updateGoalNext();
+  updateGoalNext(); updateOrder();
   setStageUI();
 }
 
@@ -300,15 +348,15 @@ const ray = new THREE.Raycaster();
 const ndcV = new THREE.Vector2();
 const tmpV = new THREE.Vector3();
 let removedFrame = 0, crustRemovedFrame = 0, lastHit = null;
-function brushR() { return BRUSH_R * (1 + 0.13 * S.lv.size); }
-function brushP() { return BASE_POWER * (1 + 0.28 * S.lv.power); }
-function spin() { return BASE_SPIN * (1 + 0.12 * S.lv.speed); }
+function brushR() { return BRUSH_R * (1 + 0.075 * S.lv.size); }
+function brushP() { return BASE_POWER * (1 + 0.16 * S.lv.power); }
+function spin() { return BASE_SPIN * (1 + 0.08 * S.lv.speed); }
 
 function stamp(u, v, rWorld, power, dt) {
   const y0 = v * (MH - 1), x0 = u * MW;
   const rRow = Math.max(0.03, cur.geo.prof[clamp(Math.round(y0), 0, MH - 1)]);
   const ru = clamp(rWorld / (TAU * rRow) * MW, 1.5, MW / 2), rv = clamp(rWorld * BRUSH_VSTRETCH / 1.9 * (MH - 1), 1.5, MH / 2);
-  const tough = cur.tough;
+  const tough = cur.tough, polishK = 1.25 / (1 + 0.3 * cur.mi);
   let rem = 0, crem = 0;
   for (let y = Math.max(0, Math.floor(y0 - rv)); y <= Math.min(MH - 1, Math.ceil(y0 + rv)); y++) {
     const dy = (y - y0) / rv, o = y * MW, live = rowW[y];
@@ -316,7 +364,7 @@ function stamp(u, v, rWorld, power, dt) {
       const dx = (xi - x0) / ru, q = dx * dx + dy * dy; if (q >= 1) continue;
       const f = q < 0.45 ? 1 : 1 - (q - 0.45) / 0.55;
       const i = o + ((xi % MW) + MW) % MW; const d = dirt[i]; if (d <= 0) continue;
-      const k = power * dt * f * (d > 0.5 ? 1 / tough : 1.25);
+      const k = power * dt * f * (d > 0.5 ? 1 / (tough * (1 + 2.5 * hard[i])) : polishK);
       const nd = Math.max(0, d - k); dirt[i] = nd;
       if (live) { rem += d - nd; if (d > 0.5) crem += d - Math.max(0.5, nd); }
     }
@@ -326,6 +374,29 @@ function stamp(u, v, rWorld, power, dt) {
   return rem;
 }
 
+function checkPatches() {
+  for (const pt of patches) {
+    if (pt.popped) continue;
+    let rem = 0; for (const i of pt.idx) rem += Math.max(0, dirt[i] - 0.5);
+    if (rem > pt.total * 0.5) continue;
+    pt.popped = true;
+    for (const i of pt.idx) if (dirt[i] > 0.5) dirt[i] = 0.5;
+    for (let i = 0; i < hard.length; i++) if (hard[i] > 0 && dirt[i] <= 0.5) hard[i] = 0;
+    recount(); maskDirty = true;
+    // burst of chunks at the patch's place on the piece
+    const r = cur.geo.prof[pt.cy], phi = pt.cx / MW * TAU;
+    const at = piece.localToWorld(new THREE.Vector3(Math.sin(phi) * r, cur.geo.profY[pt.cy], Math.cos(phi) * r));
+    const nW = new THREE.Vector3(at.x, 0, at.z).normalize();
+    emit(flakes, 40, at, { life: 1.1, spread: 0.08, size: 0.05, color: crustColor, vel: () => ({ x: nW.x * 1.6 + (Math.random() - 0.5) * 1.8, y: 0.6 + Math.random() * 1.6, z: nW.z * 1.6 + (Math.random() - 0.5) * 1.8 }) });
+    emit(glints, 10, at, { life: 0.5, spread: 0.12, size: 0.13, color: glintCol, vel: () => ({ x: nW.x * 0.5, y: 0.3, z: nW.z * 0.5 }) });
+    audio.play('crack', { rate: 0.92 + Math.random() * 0.16 });
+    const p = at.clone().project(camera); floatText('Crack!', (p.x + 1) / 2 * innerWidth, (1 - p.y) / 2 * innerHeight);
+  }
+}
+function floatText(t, x, y) {
+  const f = document.createElement('div'); f.className = 'float'; f.textContent = t; f.style.left = `${x}px`; f.style.top = `${y}px`; document.body.appendChild(f);
+  f.animate([{ opacity: 0, transform: 'translate(-50%,-30%) scale(.7)' }, { opacity: 1, transform: 'translate(-50%,-70%) scale(1.05)', offset: 0.2 }, { opacity: 0, transform: 'translate(-50%,-160%) scale(1)' }], { duration: 900, easing: 'ease-out' }).onfinish = () => f.remove();
+}
 function hitAt(px, py) {
   ndcV.set(px / innerWidth * 2 - 1, -(py / innerHeight) * 2 + 1);
   ray.setFromCamera(ndcV, camera);
@@ -388,7 +459,7 @@ const glintCol = () => ({ r: 1, g: 0.92 + Math.random() * 0.08, b: 0.75 + Math.r
 
 function emitAt(worldP, normalW, crustAmt, polishAmt) {
   if (crustAmt > 0) {
-    const n = Math.min(10, Math.ceil(crustAmt * 0.06));
+    const n = Math.min(10 + S.lv.power, Math.ceil(crustAmt * 0.06 * (1 + 0.08 * S.lv.power)));
     const w = spin();
     emit(flakes, n, worldP, { life: 0.9, spread: 0.03, size: 0.028, color: crustColor,
       vel: () => ({ x: -worldP.z * w * 0.45 + normalW.x * 0.8 + (Math.random() - 0.5) * 0.7, y: 0.4 + Math.random() * 0.9, z: worldP.x * w * 0.45 + normalW.z * 0.8 + (Math.random() - 0.5) * 0.7 }) });
@@ -490,9 +561,9 @@ function helperTick(dt) {
   const r = cur.geo.prof[y], hy = cur.geo.profY[y];
   const u = ((Math.PI / 2 - piece.rotation.y) / TAU % 1 + 1) % 1;
   const c0 = crustRemovedFrame, r0 = removedFrame;
-  stamp(u, helperV, brushR() * 0.6, BASE_POWER * 0.35 * S.lv.helper, dt);
+  stamp(u, helperV, brushR() * 0.6, BASE_POWER * 0.16 * S.lv.helper, dt);
   helper.position.set(r + 0.11, TABLE_TOP + hy, 0.02);
-  wheel.rotation.x += dt * 20;
+  wheel.rotation.x += dt * (14 + 4 * S.lv.helper);
   const crem = crustRemovedFrame - c0, prem = removedFrame - r0 - crem;
   if (Math.random() < 0.5) emitAt(tmpV.set(r + 0.01, TABLE_TOP + hy, 0), new THREE.Vector3(1, 0, 0), crem, prem);
 }
@@ -503,15 +574,30 @@ let state = 'play', progress = 0, stage = 'crust', revealT = -1, slideIn = 0, sl
 let away = false, panelOpen = null, firstSaleT = null;
 let sweepFx = 0, scrubR = 0, scrubP = 0;
 
+function newOrder() {
+  const n = S.restored, nm = metalsAvailable(n), ns = shapesAvailable(n), r = rnd(n * 431 + 7);
+  let si, mi, k = 0;
+  do { si = Math.floor(r() * ns); mi = Math.floor(r() * nm); k++; } while (k < 20 && cur && si === cur.si && mi === cur.mi);
+  S.order = { si, mi, wait: 2 };
+}
+function updateOrder() {
+  const el = $('order'); if (!S.order) { el.classList.add('hidden'); return; }
+  const o = S.order; el.classList.remove('hidden');
+  el.querySelector('.oi').innerHTML = shapeSvg(o.si, METALS[o.mi].metal);
+  el.querySelector('.on').textContent = `${METALS[o.mi].name} ${SHAPES[o.si].name}`;
+  el.querySelector('.ow').textContent = cur && cur.order ? 'On your lathe now · pays ×2' : o.wait <= 0 ? 'Comes next · pays ×2' : `Arrives in ${o.wait} ${o.wait === 1 ? 'piece' : 'pieces'} · pays ×2`;
+  el.classList.toggle('now', !!(cur && cur.order));
+}
 function updateGoalNext() {
-  const mi = cur.mi, n = SHAPES.filter((_, si) => S.shelf[`${mi}:${si}`]).length, goal = n < 4 ? 4 : SHAPES.length;
+  const mi = cur.mi, n = SHAPES.filter((_, si) => S.shelf[`${mi}:${si}`]).length, goal = Math.min(SHAPES.length, (Math.floor(n / 4) + 1) * 4);
   $('goalNext').textContent = n >= SHAPES.length ? `${METALS[mi].name} shelf complete` : `${METALS[mi].name} shelf ${n}/${goal} for a bonus`;
 }
+function toolTier() { return S.lv.power >= 10 ? 2 : S.lv.power >= 5 ? 1 : 0; }
 function setStageUI() {
   const crust = stage === 'crust';
   $('stage').textContent = crust ? METALS[cur.mi].verb : 'Polish it to a shine';
   $('gaugeF').classList.toggle('pol', !crust);
-  $('toolIc').innerHTML = `<use href="#${crust ? 'i-brush' : 'i-cloth'}"/>`;
+  $('toolIc').innerHTML = `<use href="#${crust ? ['i-brush', 'i-rotary', 'i-buffer'][toolTier()] : 'i-cloth'}"/>`;
   $('hint').querySelector('.txt').textContent = crust ? 'Hold on the piece' : 'Keep holding to polish';
 }
 
@@ -519,6 +605,7 @@ function updateProgress() {
   progress = clamp(1 - dSum / d0Sum, 0, 1);
   const crustLeft = crustSum / Math.max(1e-6, crust0);
   if (stage === 'crust' && crustLeft < 0.025) { stage = 'polish'; audio.play('ting'); setStageUI(); }
+  if (cur.grade && !cur.engrHinted && progress > 0.45) { cur.engrHinted = true; showPop('Something is engraved here…', 'Polish it to see'); }
   $('gaugeF').style.width = `${Math.min(100, progress / cur.doneAt * 100).toFixed(1)}%`;
   $('pct').textContent = `${Math.min(100, Math.floor(progress / cur.doneAt * 100))}%`;
   if (progress >= cur.doneAt && state === 'play') startReveal();
@@ -526,23 +613,31 @@ function updateProgress() {
 
 function startReveal() {
   state = 'reveal'; revealT = 0; pointer.down = false; toolEl.classList.remove('down');
-  audio.play('reveal'); platform.happytime?.();
+  $('stage').textContent = 'Restored!';
+  audio.play('reveal', { rate: [0.86, 0.95, 1, 1.12, 1.06][cur.mi] }); platform.happytime?.();
   const key = `${cur.mi}:${cur.si}`, isNew = !S.shelf[key];
   S.shelf[key] = (S.shelf[key] || 0) + 1; S.restored++; S.sales++;
   const rowN = SHAPES.filter((_, si) => S.shelf[`${cur.mi}:${si}`]).length;
-  if (isNew && (rowN === 4 || rowN === SHAPES.length)) {
-    const bonus = cur.value * (rowN === 4 ? 4 : 10);
+  if (isNew && (rowN % 4 === 0)) {
+    const bonus = cur.value * (rowN === SHAPES.length ? 10 : rowN === 8 ? 6 : 4);
     setTimeout(() => { showBanner(`${METALS[cur.mi].name} shelf ${rowN}/${SHAPES.length}!`, `Collector bonus +${bonus}`); audio.play('fanfare'); flyCoins(bonus); }, 1500);
   }
-  const val = cur.value;
+  const GR = [['', 1], ['Fine engraving', 1.5], ['Masterwork', 3]][cur.grade || 0];
+  const val = Math.round(cur.value * GR[1] * (cur.order ? 2 : 1));
   cur.sold = val; cur.isNew = isNew;
+  if (cur.grade) { S.grades = S.grades || {}; S.grades[key] = Math.max(S.grades[key] || 0, cur.grade); }
   if (firstSaleT == null) firstSaleT = playT;
   setTimeout(() => {
-    showPop(isNew ? 'New for your shelf!' : 'Sold!', `${METALS[cur.mi].name} ${SHAPES[cur.si].name}  +${val}`);
+    const head = cur.order ? 'Order delivered!' : cur.grade ? `${GR[0]}!` : isNew ? 'New for your shelf!' : 'Sold!';
+    showPop(head, `${METALS[cur.mi].name} ${SHAPES[cur.si].name}${cur.grade ? ` ×${GR[1]}` : ''}${cur.order ? ' ×2' : ''}  +${val}`);
+    if (cur.grade === 2 || cur.order) audio.play('fanfare', { vol: 0.8 });
     flyCoins(val);
     audio.play('sold');
     if (S.sales % 3 === 0 && platform.hasRewarded) showOffer(val);
   }, 700);
+  if (cur.order) S.order = null; else if (S.order) S.order.wait = Math.max(0, S.order.wait - 1);
+  if (!S.order && S.sales >= 3) newOrder();
+  setTimeout(updateOrder, 900);
   updateShelfBtn(); saveSoon();
 }
 
@@ -587,13 +682,14 @@ function flyCoins(total) {
   const n = clamp(Math.round(Math.sqrt(total)), 4, 12), per = Math.floor(total / n);
   let given = 0;
   for (let i = 0; i < n; i++) {
+    const pitch = 0.9 + i / n * 0.35;
     const el = document.createElement('div'); el.className = 'fcoin'; el.innerHTML = '<svg viewBox="0 0 32 32" width="26" height="26"><use href="#i-coin"/></svg>';
     document.body.appendChild(el);
     const ox = (Math.random() - 0.5) * 140, oy = (Math.random() - 0.5) * 90, delay = i * 45;
     const amt = i === n - 1 ? total - given : per; given += amt;
     el.animate([{ transform: `translate(${sx}px, ${sy}px) scale(.6)` }, { transform: `translate(${sx + ox}px, ${sy + oy}px) scale(1.1)`, offset: 0.35 },
       { transform: `translate(${tgt.left + tgt.width / 2}px, ${tgt.top + tgt.height / 2}px) scale(.8)` }], { duration: 750, delay, easing: 'cubic-bezier(.5,0,.6,1)', fill: 'both' })
-      .onfinish = () => { el.remove(); addCoins(amt); audio.play('coin', { vol: 0.7, rate: 0.95 + Math.random() * 0.15 }); const c = $('coins'); c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump'); };
+      .onfinish = () => { el.remove(); addCoins(amt); audio.play('coin', { vol: 0.6, rate: pitch }); const c = $('coins'); c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump'); };
   }
   const f = document.createElement('div'); f.className = 'float'; f.textContent = `+${total}`; f.style.left = `${sx}px`; f.style.top = `${sy - 40}px`; document.body.appendChild(f);
   f.animate([{ opacity: 0, transform: 'translate(-50%,-30%) scale(.7)' }, { opacity: 1, transform: 'translate(-50%,-80%) scale(1.1)', offset: 0.25 }, { opacity: 0, transform: 'translate(-50%,-200%) scale(1)' }], { duration: 1300, easing: 'ease-out' }).onfinish = () => f.remove();
@@ -626,7 +722,7 @@ function buy(u) {
   if (S.coins < c) { audio.play('error'); const b = $(`up-${u.id}`); b.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }], { duration: 200 }); return; }
   S.coins -= c; S.lv[u.id]++; audio.play('buy'); refreshUps(); saveSoon();
   if (u.id === 'size') { sizeTool(); toolEl.classList.add('on'); placeAtPiece(); toolEl.animate([{ transform: toolEl.style.transform + ' scale(1.35)' }, { transform: toolEl.style.transform }], { duration: 450, easing: 'cubic-bezier(.3,1.6,.5,1)' }); showPop('Bigger brush!', `Level ${S.lv.size}`); }
-  if (u.id === 'power') showPop('Stronger scrub!', `Rust comes off ${Math.round(28 * S.lv.power)}% faster`);
+  if (u.id === 'power') { const t = toolTier(); setStageUI(); showPop(S.lv.power === 5 ? 'New tool: rotary brush!' : S.lv.power === 10 ? 'New tool: power buffer!' : 'Stronger scrub!', `Grime comes off ${Math.round(16 * S.lv.power)}% faster`); }
   if (u.id === 'speed') showPop('Faster lathe!', `Level ${S.lv.speed}`);
   if (u.id === 'helper' && S.lv.helper === 1) showBanner('Apprentice hired!', 'Polishes the piece for you, even when you rest');
 }
@@ -646,11 +742,13 @@ function openShelf() {
     lab.innerHTML = `<span>${mt.name}</span><span>${mi < nm ? `${have}/${SHAPES.length}` : `unlocks after ${mt.unlock} pieces`}</span>`; g.appendChild(lab);
     SHAPES.forEach((sh, si) => {
       const c = document.createElement('div'); c.className = 'cell'; const n = S.shelf[`${mi}:${si}`];
-      c.innerHTML = shapeSvg(si, n ? mt.metal : '#3a2818') + (n > 1 ? `<b>x${n}</b>` : '');
+      const gd = (S.grades || {})[`${mi}:${si}`] || 0;
+      c.innerHTML = shapeSvg(si, n ? mt.metal : '#3a2818') + (n > 1 ? `<b>x${n}</b>` : '') + (gd ? `<i class="gd g${gd}" title="${gd === 2 ? 'Masterwork' : 'Fine'}">★</i>` : '');
       g.appendChild(c);
     });
   });
-  $('shelfSub').textContent = `${Object.keys(S.shelf).length} of ${METALS.length * SHAPES.length} pieces restored`;
+  const gv = Object.values(S.grades || {}), mw = gv.filter((g) => g === 2).length, fi = gv.filter((g) => g === 1).length;
+  $('shelfSub').textContent = `${Object.keys(S.shelf).length} of ${METALS.length * SHAPES.length} restored · ${fi} fine · ${mw} masterwork`;
   openPanel('shelf');
 }
 function openPanel(id) { audio.unlock(); audio.play('open'); panelOpen = id; $('veil').classList.remove('hidden'); $(id).classList.remove('hidden'); platform.gameplayStop(); pointer.down = false; }
@@ -725,12 +823,12 @@ function frame(now) {
   if (slideIn > 0) { slideIn = Math.max(0, slideIn - dt * 2.4); const e = slideIn * slideIn * (3 - 2 * slideIn); piece.position.x = -2.4 * e; piece.position.y = Math.sin(e * Math.PI) * 0.15; }
   if (state === 'play') {
     brushTick(dt); helperTick(dt);
-    if (maskDirty) { uploadMask(); updateProgress(); }
+    if (maskDirty) { checkPatches(); uploadMask(); updateProgress(); }
     // hint: until the player has held for a moment, and again after a long idle
     idleT = pointer.down ? 0 : idleT + dt;
     const showHint = slideIn === 0 && !panelOpen && ((everHeld < 0.8 && !pointer.down) || idleT > 7);
     $('hint').classList.toggle('hidden', !showHint);
-    if (showHint) { const p = tmpV.set(0, TABLE_TOP + cur.geo.h * 0.55, 0.3).project(camera); const hs = $('hint').style; hs.left = `${(p.x + 1) / 2 * innerWidth}px`; hs.top = `${(1 - p.y) / 2 * innerHeight}px`; }
+    if (showHint) { const p = tmpV.set(0, TABLE_TOP + cur.geo.h * 0.9 + 0.12, 0.3).project(camera); const hs = $('hint').style; const gb = $('goal').getBoundingClientRect().bottom, hh = $('hint').offsetHeight || 110; hs.left = `${(p.x + 1) / 2 * innerWidth}px`; hs.top = `${Math.max((1 - p.y) / 2 * innerHeight, gb + 8 + hh / 2)}px`; }
   } else if (state === 'reveal') {
     revealT += dt;
     $('hint').classList.add('hidden');
@@ -753,7 +851,7 @@ function frame(now) {
   // scrub sound follows what is being removed right now
   const idt = dt > 0 ? 1 / dt : 0, tr = clamp(crustRemovedFrame * idt / 90, 0, 1), tp = clamp((removedFrame - crustRemovedFrame) * idt / 90, 0, 1);
   scrubR = lerp(scrubR, tr, 0.5); scrubP = lerp(scrubP, tp, 0.5);
-  audio.scrub(scrubR, scrubP, 0.9 + w / BASE_SPIN * 0.1);
+  audio.scrub(scrubR, scrubP, 0.88 + w / BASE_SPIN * 0.08 + (cur ? Math.min(1, progress / cur.doneAt) * 0.18 : 0));
   removedFrame = 0; crustRemovedFrame = 0;
   if (contactT > 0) { contactT = Math.max(0, contactT - dt); } contact.scale.setScalar(0.42 + 0.5 * (contactT / 0.3)); contact.material.opacity = pointer.down && state === 'play' ? Math.max(contactT / 0.3, 0.35) : contactT / 0.3;
   if (pointer.down && lastHit) contact.position.copy(lastPoint);
@@ -777,7 +875,7 @@ async function boot() {
   Object.keys(S.shelf).slice(-8).forEach((k) => { const [mi, si] = k.split(':').map(Number); addShelfItem(si, mi); });
   SHAPES.forEach((_, i) => pieceGeo(i));
   setupPiece(); slideIn = 0; piece.position.set(0, 0, 0);
-  sizeTool(); refreshUps(); updateShelfBtn(); shownCoins = S.coins; coinEl.textContent = fmt(S.coins);
+  updateOrder(); sizeTool(); refreshUps(); updateShelfBtn(); shownCoins = S.coins; coinEl.textContent = fmt(S.coins);
   { const warm = cleanMats.map((m, i) => { const w = new THREE.Mesh(pieceGeo(0).g, m); w.position.set(-50 + i, 0, 0); scene.add(w); return w; }); renderer.compile(scene, camera); warm.forEach((w) => scene.remove(w)); }
   bar.style.width = '100%';
   requestAnimationFrame((t) => { last = t; frame(t); });
@@ -805,6 +903,7 @@ async function boot() {
         return null;
       },
       give(n) { addCoins(n); },
+      get patches() { return patches.map((p) => ({ n: p.idx.length, cx: p.cx, cy: p.cy, popped: p.popped })); },
       get ptr() { return { ...pointer }; }, get adPause() { return adPause; },
       hud(v) { $('hud').style.visibility = v ? '' : 'hidden'; $('hint').style.visibility = v ? '' : 'hidden'; $('tool').style.visibility = v ? '' : 'hidden'; },
       // store shots: force a piece and clean it half way (the right half of the turn shines)

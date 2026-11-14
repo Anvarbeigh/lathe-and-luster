@@ -2,7 +2,7 @@
 // much the player is removing right now, and a soft music loop. Browsers allow audio only after a user gesture:
 // call audio.unlock() from input handlers. suspend()/resume() are stack-safe (hidden tab, blur, ads, portal pause).
 
-const SFX = ['buy', 'click', 'close', 'coin', 'error', 'open', 'unlock', 'whoosh', 'place', 'sold', 'reveal', 'ting', 'fanfare',
+const SFX = ['crack', 'buy', 'click', 'close', 'coin', 'error', 'open', 'unlock', 'whoosh', 'place', 'sold', 'reveal', 'ting', 'fanfare',
   'scrub_rust', 'scrub_polish', 'music'];
 const MUSIC_GAIN = 0.5;
 
